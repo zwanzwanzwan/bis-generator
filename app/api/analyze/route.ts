@@ -26,63 +26,56 @@ export async function POST(request: NextRequest) {
 
     const anthropic = new Anthropic({ apiKey });
 
-    // Step 1: Web search research
-    const researchResponse = await anthropic.messages.create({
+    // Single API call: web search + BIS generation combined
+    const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 2000,
+      system: `You are a brand strategist. First, search the web for information about the given brand. Then, based on your research, generate a Brand Identity System JSON.
+
+${BIS_SYSTEM_PROMPT}
+
+IMPORTANT: After researching, output ONLY the JSON object. No other text.`,
       tools: [
         {
           type: "web_search_20250305" as const,
           name: "web_search",
-          max_uses: 5,
+          max_uses: 3,
         },
       ],
       messages: [
         {
           role: "user",
-          content: `"${brandName}" 브랜드에 대해 조사해줘. 브랜드 비전, 미션, 핵심 가치, 슬로건, 주요 제품/서비스, 타겟 고객, 차별점을 중심으로.`,
+          content: `"${brandName}" 브랜드를 웹 검색으로 조사한 후, BIS JSON을 생성해줘. 브랜드 비전, 미션, 핵심 가치, 슬로건, 주요 제품/서비스, 타겟 고객, 차별점을 조사해서 반영해줘. 결과는 반드시 JSON만 출력해.`,
         },
       ],
     });
 
-    // Extract all text blocks from research response
-    const researchText = researchResponse.content
+    // Extract text blocks from response
+    const responseText = response.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
       .map((block) => block.text)
-      .join("\n");
+      .join("");
 
-    if (!researchText) {
+    if (!responseText) {
       return NextResponse.json(
         {
           success: false,
-          error: "브랜드 리서치 결과를 가져오지 못했습니다.",
+          error: "브랜드 분석 결과를 가져오지 못했습니다.",
         },
         { status: 500 }
       );
     }
 
-    // Step 2: Generate BIS JSON
-    const bisResponse = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system: BIS_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: `다음 브랜드 리서치를 바탕으로 BIS JSON을 생성해줘:\n\n${researchText}`,
-        },
-      ],
-    });
-
-    const bisText = bisResponse.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("");
-
     // Parse JSON (handle markdown code blocks)
-    let jsonStr = bisText.trim();
+    let jsonStr = responseText.trim();
     jsonStr = jsonStr.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
     jsonStr = jsonStr.trim();
+
+    // Try to extract JSON if there's extra text
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[0];
+    }
 
     let bisData: BISData;
     try {
